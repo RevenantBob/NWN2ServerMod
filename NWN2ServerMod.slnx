@@ -1,0 +1,15 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="Detours/Detours.vcxproj" Id="731affc2-dd95-4fe5-9c05-8bb33438399c" />
+  <Project Path="src/NWN2ModLoader/NWN2ModLoader.vcxproj" Id="bb13c8b7-f3d9-4178-8425-df0bfa8608b5">
+    <BuildDependency Project="Detours/Detours.vcxproj" />
+    <BuildDependency Project="src/NWN2Shared/NWN2Shared.vcxproj" />
+  </Project>
+  <Project Path="src/NWN2ServerMod/NWN2ServerMod.vcxproj" Id="b21211ee-2d29-4d34-a410-dea0e51be508">
+    <BuildDependency Project="src/NWN2ModLoader/NWN2ModLoader.vcxproj" />
+    <BuildDependency Project="src/NWN2Shared/NWN2Shared.vcxproj" />
+  </Project>
+  <Project Path="src/NWN2Shared/NWN2Shared.vcxproj" Id="4e052d6c-3e5c-45c3-9818-6f97d689d234" />
+</Solution>
