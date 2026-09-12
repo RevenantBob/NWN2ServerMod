@@ -1,6 +1,7 @@
 #include "NWN2Mod.h"
 #include "PEPattern.h"
 #include <detours.h>
+#include <cstring>
 #include "Commands.h"
 
 std::unique_ptr<NWN2Mod> NWN2Mod::Current;
@@ -252,8 +253,11 @@ std::expected<void*, std::string> NWN2Mod::FindSetBinaryData()
 
 std::expected<void*, std::string> NWN2Mod::FindVirtualMachineWrite()
 {
-    // This is the byte pattern for a section of code that writes the m_pVirtualMachine in StartServices.
-    std::string pattern = "41 B8 32 12 00 00 48 8D 15 ?? ?? ?? ?? B9 08 05 00 00 FF 15 ?? ?? ?? ?? 48 89 85 ?? ?? ?? ?? 48 85 C0 74 11 49 8B 95 ?? ?? ?? ?? 48 8B C8 E8 ?? ?? ?? ?? EB 03 49 8B C4 48 89 05 ?? ?? ?? ??";
+    // This is the byte pattern for the section of StartServices that writes the g_pVirtualMachine global. The pattern
+    // ends at the TEST preceding that write, as the instructions between there and the write differ between builds.
+    // Extending the pattern past this point will break the match.
+
+    std::string pattern = "41 B8 32 12 00 00 48 8D 15 ?? ?? ?? ?? B9 08 05 00 00 FF 15 ?? ?? ?? ?? 48 89 85 ?? ?? ?? ?? 48 85 C0";
 
     auto result = PEPattern::FindPattern(L"NWN2Server64.exe", pattern);
     if (!result)
@@ -261,14 +265,31 @@ std::expected<void*, std::string> NWN2Mod::FindVirtualMachineWrite()
         return std::unexpected(result.error());
     }
 
-    uintptr_t offset = (uintptr_t)result.value();
+    uint8_t* anchor = (uint8_t*)result.value();
 
-    // The instruction you want starts 0x38 bytes ahead:
-    // 140570285: 48 89 05 5C C0 2D 01
-    offset += 0x38;
+    // The write itself is "48 89 05 <disp32>" (MOV [rip+disp32], RAX). We scan forward for that opcode rather than
+    // stepping a fixed distance from the anchor, as the distance shifts between builds. It is the only occurrence
+    // within the search window, so there is no risk of landing on the wrong instruction.
+    constexpr uint8_t STORE_OPCODE[] = { 0x48, 0x89, 0x05 };
+    constexpr size_t  STORE_LENGTH   = 7;     // opcode (3) + disp32 (4)
+    constexpr size_t  SEARCH_LIMIT   = 0x50;
 
-    auto absoluteAddress = ExtractRipRelativeAddress(offset, 0, 3, 7);
-    
+    size_t storeOffset = 0;
+    for (; storeOffset < SEARCH_LIMIT; ++storeOffset)
+    {
+        if (std::memcmp(anchor + storeOffset, STORE_OPCODE, sizeof(STORE_OPCODE)) == 0)
+        {
+            break;
+        }
+    }
+
+    if (storeOffset >= SEARCH_LIMIT)
+    {
+        return std::unexpected(std::format("Found g_pVirtualMachine anchor at 0x{:016X}, but no write instruction within 0x{:X} bytes", (uint64_t)anchor, SEARCH_LIMIT));
+    }
+
+    auto absoluteAddress = ExtractRipRelativeAddress((uintptr_t)(anchor + storeOffset), 0, 3, STORE_LENGTH);
+
     return (void *)absoluteAddress;
 }
 
