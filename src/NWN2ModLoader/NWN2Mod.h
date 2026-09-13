@@ -33,6 +33,21 @@ typedef DataBlockPtr*(__fastcall* GetBinaryDataFunc)(
     CExoString* pPlayerExoStr);
 
 /// <summary>
+/// The real engine's <c>CNWSMessage::SendServerToPlayerChatMessage</c>: the single function every
+/// chat message (Talk/Shout/Whisper/Tell/Party and their DM variants) funnels through before NWN2
+/// sends it to any client.
+/// </summary>
+typedef int(__fastcall* SendServerToPlayerChatMessageFunc)(
+    void* pThis,
+    uint8_t mode,
+    uint32_t senderId,
+    CExoString* message,
+    uint32_t targetId,
+    void* clientList,
+    CExoString* extraMessage,
+    bool runScriptFlag);
+
+/// <summary>
 /// The real engine's <c>CVirtualMachine::RunScript(CExoString*, unsigned long, int, PARAMTER_VALIDATION)</c>
 /// convenience overload, which always runs against the global <c>g_pVirtualMachine</c>.
 /// </summary>
@@ -109,12 +124,19 @@ public:
     /// <summary>See <see cref="IPluginHost::RunScript"/>.</summary>
     bool RunScript(const char* script, uint32_t objectId) const override;
 
+    /// <summary>See <see cref="IPluginHost::RegisterChatHook"/>.</summary>
+    ChatHookFunc RegisterChatHook(ChatHookFunc hook) override;
+
 private:
     static InitializeNetLayerFunc _InitializeNetLayer;
     static InitializeCommandsFunc _InitializeCommands;
     static SetBinaryDataFunc _SetBinaryData;
     static GetBinaryDataFunc _GetBinaryData;
     static RunScriptFunc _RunScript;
+    static SendServerToPlayerChatMessageFunc _SendServerToPlayerChatMessage;
+
+    /// <summary>The currently registered chat hook, or <see langword="nullptr"/> if none is (see <see cref="RegisterChatHook"/>).</summary>
+    static ChatHookFunc _ChatHook;
 
     /// <summary>Patches the <c>NWNX*</c> command function pointers directly into the game's command table.</summary>
     /// <remarks>NWN2Server calls these through the table by pointer, so no detouring is needed for them.</remarks>
@@ -132,14 +154,25 @@ private:
     /// <summary>Handler for a script's <c>NWNXGetString</c> call, wired directly into the command table.</summary>
     /// <returns>
     /// A pointer valid until the next call to this function - the engine never modifies the
-    /// string it's given, so a single reused static buffer is safe here.
+    /// string it's given, so a single reused static buffer is safe here. Empty if no plugin is
+    /// registered for <paramref name="plugin"/>, or its <c>OnNWNXGetString</c> left the result untouched.
     /// </returns>
     static const char * __cdecl NWNXGetString(const char* plugin, const char* function, const char* param1, int param2);
 
     /// <summary>Handler for a script's <c>NWNXGetInt</c> call, wired directly into the command table.</summary>
+    /// <returns>
+    /// <c>0</c> if no plugin is registered for <paramref name="plugin"/>, or its
+    /// <c>OnNWNXGetInt</c> returned <see langword="false"/>. The script has no way to distinguish
+    /// this from a genuine value of <c>0</c>.
+    /// </returns>
     static int __cdecl NWNXGetInt(const char* plugin, const char* function, const char* param1, int param2);
 
     /// <summary>Handler for a script's <c>NWNXGetFloat</c> call, wired directly into the command table.</summary>
+    /// <returns>
+    /// <c>0.0</c> if no plugin is registered for <paramref name="plugin"/>, or its
+    /// <c>OnNWNXGetFloat</c> returned <see langword="false"/>. The script has no way to distinguish
+    /// this from a genuine value of <c>0.0</c>.
+    /// </returns>
     static float __cdecl NWNXGetFloat(const char* plugin, const char* function, const char* param1, int param2);
 
     /// <summary>Detour target for <c>CServerExoAppInternal::InitializeNetLayer</c>; runs <see cref="FinishInitialization"/> then chains to the real function.</summary>
@@ -162,6 +195,20 @@ private:
         CExoString* pCampNameExoStr,
         CExoString* pVarNameExoStr,
         CExoString* pPlayerExoStr);
+
+    /// <summary>
+    /// Detour target for <c>CNWSMessage::SendServerToPlayerChatMessage</c>; offers the message to
+    /// <see cref="_ChatHook"/> (if one is registered) before deciding whether to call through.
+    /// </summary>
+    static int __fastcall HookSendServerToPlayerChatMessage(
+        void* pThis,
+        uint8_t mode,
+        uint32_t senderId,
+        CExoString* message,
+        uint32_t targetId,
+        void* clientList,
+        CExoString* extraMessage,
+        bool runScriptFlag);
 
     /// <summary>Resolves the absolute target address of a RIP-relative <c>LEA</c>/<c>MOV</c> instruction.</summary>
     /// <param name="functionAddress">The base address the other offsets are relative to.</param>
@@ -188,6 +235,9 @@ private:
 
     /// <summary>Locates <c>CCampaignDB::GetBinaryData</c> by byte pattern.</summary>
     std::expected<void*, std::string> FindGetBinaryData();
+
+    /// <summary>Locates <c>CNWSMessage::SendServerToPlayerChatMessage</c> by byte pattern.</summary>
+    std::expected<void*, std::string> FindSendServerToPlayerChatMessage();
 
     /// <summary>Locates the instruction that writes the <c>g_pVirtualMachine</c> global, by byte pattern.</summary>
     std::expected<void*, std::string> FindVirtualMachineWrite();

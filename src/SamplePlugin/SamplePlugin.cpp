@@ -77,6 +77,10 @@ namespace
             IPlugin* self = host->GetPlugin(GetPluginId());
             GetLogger()("OnInitialize() - host->GetPlugin(\"{}\") returned {}.",
                 GetPluginId(), self == this ? "this plugin itself, as expected" : "something unexpected");
+
+            // Return value would be the previous hook, but since we're just a sample, it'll be
+            // ignored for this call. It can allow multiple plugins to hook chat though by chaining calls to previous hook.
+            host->RegisterChatHook(&SamplePlugin::OnChat);
         }
 
         bool OnSetBinaryData(const char* varName, const char* player,
@@ -172,6 +176,11 @@ namespace
             return true;
         }
 
+        static bool OnChat(uint8_t mode, uint32_t senderId, const char* message, uint32_t targetId)
+        {
+            GetLogger()("OnChat({}): '{}'", (uint32_t)mode, message);
+            return false;
+        }
     private:
         IPluginHost* _host;
         std::unordered_map<std::string, std::vector<uint8_t>> _binaryData;

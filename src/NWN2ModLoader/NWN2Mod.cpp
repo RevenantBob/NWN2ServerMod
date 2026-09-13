@@ -13,6 +13,8 @@ InitializeCommandsFunc NWN2Mod::_InitializeCommands;
 SetBinaryDataFunc NWN2Mod::_SetBinaryData;
 GetBinaryDataFunc NWN2Mod::_GetBinaryData;
 RunScriptFunc NWN2Mod::_RunScript;
+SendServerToPlayerChatMessageFunc NWN2Mod::_SendServerToPlayerChatMessage;
+ChatHookFunc NWN2Mod::_ChatHook = nullptr;
 
 std::expected<void, uint32_t> NWN2Mod::Initialize()
 {
@@ -95,6 +97,12 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
         return std::unexpected(std::format("Failed to find RunScript: {}", runScript.error()));
     }
 
+    auto sendChat = FindSendServerToPlayerChatMessage();
+    if (!sendChat)
+    {
+        return std::unexpected(std::format("Failed to find SendServerToPlayerChatMessage: {}", sendChat.error()));
+    }
+
     // Sanity check
     uint8_t *pBuffer = (uint8_t *)initNet.value();
     if (pBuffer[0] != 0x48)
@@ -125,6 +133,12 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
     {
         return std::unexpected(std::format("Found invalid address for RunScript: 0x{:016X} Data:0x{:02X}", (uint64_t)pBuffer, *pBuffer));
     }
+
+    pBuffer = (uint8_t*)sendChat.value();
+    if (pBuffer[0] != 0x48)
+    {
+        return std::unexpected(std::format("Found invalid address for SendServerToPlayerChatMessage: 0x{:016X} Data:0x{:02X}", (uint64_t)pBuffer, *pBuffer));
+    }
     // Should be initialized to 0x0000000000000000
     if (*((uintptr_t*)virtualMachine.value()) != 0x0000000000000000)
     {
@@ -136,6 +150,7 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
     _SetBinaryData = (SetBinaryDataFunc)setBinaryData.value();
     _GetBinaryData = (GetBinaryDataFunc)getBinaryData.value();
     _RunScript = (RunScriptFunc)runScript.value();
+    _SendServerToPlayerChatMessage = (SendServerToPlayerChatMessageFunc)sendChat.value();
 
     _VirtualMachine = virtualMachine.value(); // This is the address of the global. We'll fix it to the value of the global later. It lasts until server shutdown.
 
@@ -147,6 +162,7 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
     DetourAttach(&(PVOID&)_InitializeCommands, &HookInitializeCommands);
     DetourAttach(&(PVOID&)_SetBinaryData, &HookSetBinaryData);
     DetourAttach(&(PVOID&)_GetBinaryData, &HookGetBinaryData);
+    DetourAttach(&(PVOID&)_SendServerToPlayerChatMessage, &HookSendServerToPlayerChatMessage);
 
     LONG error = DetourTransactionCommit();
     if (error != NO_ERROR)
@@ -648,4 +664,58 @@ bool NWN2Mod::RunScript(const char* script, uint32_t objectId) const
     CExoString scriptName{ const_cast<char*>(script), 0 };
 
     return _RunScript(nullptr, &scriptName, objectId, 0, 0) != 0;
+}
+
+ChatHookFunc NWN2Mod::RegisterChatHook(ChatHookFunc hook)
+{
+    ChatHookFunc previous = _ChatHook;
+    _ChatHook = hook;
+    return previous;
+}
+
+int __fastcall NWN2Mod::HookSendServerToPlayerChatMessage(
+    void* pThis,
+    uint8_t mode,
+    uint32_t senderId,
+    CExoString* message,
+    uint32_t targetId,
+    void* clientList,
+    CExoString* extraMessage,
+    bool runScriptFlag)
+{
+    // A registered hook fully owns the decision to suppress; if it declines (or none is
+    // registered), fall through to the real function untouched - all six parameters, including
+    // the ones no plugin ever sees, are forwarded exactly as NWN2 passed them in.
+    if (_ChatHook && _ChatHook(mode, senderId, message->m_sString, targetId))
+    {
+        return 1;
+    }
+
+    return _SendServerToPlayerChatMessage(pThis, mode, senderId, message, targetId, clientList, extraMessage, runScriptFlag);
+}
+
+std::expected<void*, std::string> NWN2Mod::FindSendServerToPlayerChatMessage()
+{
+    // This is the byte pattern for the beginning of CNWSMessage::SendServerToPlayerChatMessage -
+    // the single function every chat message (Talk/Shout/Whisper/Tell/Party and their DM variants)
+    // funnels through before NWN2 sends it to any client, which is what makes it the right place
+    // to intercept chat for IPluginHost::RegisterChatHook.
+    //
+    // 48 8B C4                 MOV    RAX,RSP
+    // 48 89 58 18              MOV    [RAX+0x18],RBX
+    // 88 50 10                 MOV    byte ptr [RAX+0x10],DL    ; mode (2nd arg)
+    // 48 89 48 08              MOV    [RAX+0x8],RCX             ; this (1st arg)
+    // 55 56 57 41 54 41 55 41 56 41 57   PUSH RBP/RSI/RDI/R12/R13/R14/R15
+    // 48 8D 68 ??              LEA    RBP,[RAX-0x3F]            (offset wildcarded)
+    // 48 81 EC ?? ?? ?? ??     SUB    RSP,0xA0                  (immediate wildcarded)
+    // 0F 29 70 ??              MOVAPS [RAX-0x48],XMM6           (offset wildcarded)
+    // 0F 29 78 ??              MOVAPS [RAX-0x58],XMM7           (offset wildcarded)
+    // 4D 8B E1                 MOV    R12,R9                    ; message (4th arg)
+    // 41 8B F0                 MOV    ESI,R8D                   ; senderId (3rd arg)
+    // 0F B6 DA                 MOVZX  EBX,DL
+    // 4C 8B F9                 MOV    R15,RCX
+    // BF 01 00 00 00           MOV    EDI,0x1
+    // 48 8B 0D ?? ?? ?? ??     MOV    RCX,[g_pAppManager]       (RIP-relative; displacement wildcarded)
+    std::string pattern = "48 8B C4 48 89 58 18 88 50 10 48 89 48 08 55 56 57 41 54 41 55 41 56 41 57 48 8D 68 ?? 48 81 EC ?? ?? ?? ?? 0F 29 70 ?? 0F 29 78 ?? 4D 8B E1 41 8B F0 0F B6 DA 4C 8B F9 BF 01 00 00 00 48 8B 0D ?? ?? ?? ??";
+    return PEPattern::FindPattern(L"NWN2Server64.exe", pattern);
 }

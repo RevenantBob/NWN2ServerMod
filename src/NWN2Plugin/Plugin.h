@@ -15,6 +15,59 @@ public:
 };
 
 /// <summary>
+/// NWN2's own chat channel/mode byte values, passed to <see cref="ChatHookFunc"/> as <c>mode</c>.
+/// </summary>
+/// <remarks>
+/// Reverse-engineered from <c>CNWSMessage::SendServerToPlayerChatMessage</c> and the NWScript
+/// command handlers that call it. <see cref="DM_FLAG"/> is a real bit, not a separate concept per
+/// channel: the engine computes a DM (green text) message by OR-ing it onto <see cref="TALK"/>,
+/// <see cref="SHOUT"/>, <see cref="WHISPER"/>, or <see cref="TELL"/> whenever the recipient
+/// resolves to a DM, so e.g. DM Talk arrives as <c>TALK | DM_FLAG</c>. <see cref="SERVER_TELL"/>
+/// and the silent-talk/shout modes have no DM variant.
+/// </remarks>
+class ChatMode
+{
+public:
+    /// <summary>Normal talk range.</summary>
+    static constexpr uint8_t TALK = 1;
+    /// <summary>Shout range.</summary>
+    static constexpr uint8_t SHOUT = 2;
+    /// <summary>Whisper range.</summary>
+    static constexpr uint8_t WHISPER = 3;
+    /// <summary>A tell sent to one specific player (see <c>targetId</c>).</summary>
+    static constexpr uint8_t TELL = 4;
+    /// <summary>A server-originated tell, matching NWScript's own <c>SendMessageToPC</c>-style server messages.</summary>
+    static constexpr uint8_t SERVER_TELL = 5;
+    /// <summary>Party chat.</summary>
+    static constexpr uint8_t PARTY = 6;
+    /// <summary>NWScript's <c>TALKVOLUME_SILENT_TALK</c>: a talk-range message with no chat-window text, only the in-world speech bubble.</summary>
+    static constexpr uint8_t SILENT_TALK = 0xD;
+    /// <summary>NWScript's <c>TALKVOLUME_SILENT_SHOUT</c>: a shout-range message with no chat-window text, only the in-world speech bubble.</summary>
+    static constexpr uint8_t SILENT_SHOUT = 0xE;
+    /// <summary>Faction/associate chat (<c>CNWSFaction::SendChatMessage</c>). Numerically the same value as <c>PARTY | DM_FLAG</c>, but reached independently of it.</summary>
+    static constexpr uint8_t FACTION = 0x16;
+    /// <summary>OR this onto <see cref="TALK"/>/<see cref="SHOUT"/>/<see cref="WHISPER"/>/<see cref="TELL"/> to get that channel's DM (green text) variant.</summary>
+    static constexpr uint8_t DM_FLAG = 0x10;
+};
+
+/// <summary>
+/// A plugin's chat interception callback - see <see cref="IPluginHost::RegisterChatHook"/>.
+/// </summary>
+/// <param name="mode">NWN2's own chat channel byte - see <see cref="ChatMode"/> for known values.</param>
+/// <param name="senderId">The speaking object's ID, or <see cref="NWScriptObject::OBJECT_INVALID"/> for server-originated messages.</param>
+/// <param name="message">The chat text.</param>
+/// <param name="targetId">
+/// The tell/whisper recipient's object ID. Meaningless for channels that broadcast instead of
+/// targeting one object.
+/// </param>
+/// <returns>
+/// <see langword="true"/> to suppress the message entirely - NWN2 never sends it to anyone, and
+/// never runs its own chat-related scripts for it; <see langword="false"/> to let it through
+/// unchanged.
+/// </returns>
+typedef bool (*ChatHookFunc)(uint8_t mode, uint32_t senderId, const char* message, uint32_t targetId);
+
+/// <summary>
 /// The host API a plugin is given access to, e.g. to look up other loaded plugins.
 /// </summary>
 /// <remarks>
@@ -53,6 +106,27 @@ public:
     /// NWScript's <c>ExecuteScriptEx</c> allows) is not supported.
     /// </remarks>
     virtual bool RunScript(const char* script, uint32_t objectId) const = 0;
+
+    /// <summary>
+    /// Registers <paramref name="hook"/> as the chat interceptor, called for every chat message
+    /// before NWN2 sends it anywhere.
+    /// </summary>
+    /// <param name="hook">
+    /// The new hook, or <see langword="nullptr"/> to stop intercepting chat and let it behave
+    /// exactly as if no plugin had ever registered one.
+    /// </param>
+    /// <returns>
+    /// Whatever hook was previously registered, or <see langword="nullptr"/> if none was.
+    /// </returns>
+    /// <remarks>
+    /// Only one hook is ever active - registering a new one replaces the last outright. A plugin
+    /// that wants to add to an existing hook rather than silently drop it should hold onto the
+    /// returned value and call it itself (typically when it decides not to suppress a message on
+    /// its own), the same way <c>DestroyPlugin</c> chains, and unregister its own hook by
+    /// re-registering whatever it was given back, so this always stays a well-formed chain
+    /// regardless of load/unload order.
+    /// </remarks>
+    virtual ChatHookFunc RegisterChatHook(ChatHookFunc hook) = 0;
 };
 
 /// <summary>
