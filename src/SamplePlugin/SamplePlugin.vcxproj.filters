@@ -35,5 +35,8 @@
     <ClInclude Include="..\NWN2Plugin\Logger.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\NWN2Plugin\Yaml.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

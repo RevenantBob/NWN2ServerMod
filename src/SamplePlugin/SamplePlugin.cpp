@@ -4,6 +4,7 @@
 #include <Plugin.h>
 #include <Logger.h>
 #include <Data.h>
+#include <Yaml.h>
 
 #include <cstring>
 #include <string>
@@ -63,6 +64,23 @@ namespace
         explicit SamplePlugin(IPluginHost* host) : _host(host)
         {
             GetLogger()("SamplePlugin created.");
+
+            // Demonstrates Yaml.h: a plugin can load its own YAML config (here, an optional
+            // string-to-string map from SamplePlugin.yaml next to this DLL) the same way
+            // NWN2ServerMod loads nwn2mod.config, without linking against NWN2Shared at all.
+            auto configPath = std::filesystem::path(GetFullModulePath(GetOwnModule())).replace_extension(L".yaml");
+            if (std::filesystem::exists(configPath))
+            {
+                auto config = Yaml::FromFile<std::unordered_map<std::string, std::string>>(configPath);
+                if (config)
+                {
+                    GetLogger()("Loaded {} entr{} from {}.", config->size(), config->size() == 1 ? "y" : "ies", ToString(configPath.wstring()));
+                }
+                else
+                {
+                    GetLogger()("Failed to load {}: {}", ToString(configPath.wstring()), config.error());
+                }
+            }
         }
 
         const char* GetPluginId() const override

@@ -36,24 +36,21 @@ NWN2ServerMod.exe <config-path>
 
 ## Configuration Format
 
-The configuration is a JSON file which is described below.
+The configuration is a YAML file which is described below.
 
-**NOTE:** Pay attention to escape sequences in JSON strings. Only UTF-8 format is supported for JSON.
+**NOTE:** Only UTF-8 format is supported. Lines starting with `#` are comments.
 
-```
-{
-    "server_exe": "C:/SomePath/To/NWN2Server64.exe",
-    "server_args": "-moduledir <Module>",
-    "server_directory": "C:\\SomePath\\To\\Working\\Directory\\",
-    "loader_dll": "C:/SomePath/To/NWN2ModLoader.dll",
-    "loader_log": "C:/SomePath/To/LogFile.txt",
-    "server_log": "C:/SomePath/To/ServerLog.txt",
-    "debug_log": true,
-    "std_log": false,
-    "plugins": [
-        "C:/SomePath/To/MyPlugin.dll"
-    ]
-}
+```yaml
+server_exe: C:/SomePath/To/NWN2Server64.exe
+server_args: -moduledir <Module>
+server_directory: C:\SomePath\To\Working\Directory\
+loader_dll: C:/SomePath/To/NWN2ModLoader.dll
+loader_log: C:/SomePath/To/LogFile.txt
+server_log: C:/SomePath/To/ServerLog.txt
+debug_log: true
+std_log: false
+plugins:
+  - C:/SomePath/To/MyPlugin.dll
 ```
 
 ### server_exe (Required)
@@ -118,6 +115,36 @@ All methods except `GetPluginId` have no-op default implementations, so a plugin
 - `host->RunScript(script, objectId)` — runs a compiled script (a `.ncs` resref) immediately against `objectId`, like NWScript's own `ExecuteScript`. Bare `void main()` scripts only; returns `false` if the script couldn't run or the engine's VM isn't ready yet. `NWScriptObject::OBJECT_INVALID` is available for `objectId` when no target object is needed.
 
 Build a plugin with the same toolset as `NWN2ModLoader.dll` (currently `v145`) so the `IPlugin`/`IPluginHost` vtables line up between them.
+
+### Loading YAML from a Plugin
+
+`src/NWN2Plugin/Yaml.h` (a copy of `NWN2Shared`'s own header, so a plugin never needs to link against `NWN2Shared`) exposes the same YAML loading NWN2ServerMod uses for `nwn2mod.config`, for a plugin's own config:
+
+```cpp
+#include <Yaml.h>
+
+struct MyPluginConfig
+{
+    std::string someSetting;
+    std::optional<int> someOptionalSetting;
+};
+
+template <>
+struct YAML::convert<MyPluginConfig>
+{
+    static bool decode(const Node& node, MyPluginConfig& c)
+    {
+        if (!node.IsMap()) return false;
+        c.someSetting = node["someSetting"].as<std::string>();
+        c.someOptionalSetting = node["someOptionalSetting"].as<std::optional<int>>();
+        return true;
+    }
+};
+
+std::expected<MyPluginConfig, std::string> config = Yaml::FromFile<MyPluginConfig>(path);
+```
+
+Any type with a `YAML::convert<T>` specialization works, including plain `std::map`/`std::vector`/etc. that yaml-cpp already knows how to convert — `src/SamplePlugin/SamplePlugin.cpp` demonstrates loading an optional `std::unordered_map<std::string, std::string>` from `SamplePlugin.yaml` next to the DLL with no custom `convert` needed. A plugin project needs yaml-cpp's headers on its include path and `YAML_CPP_STATIC_DEFINE` defined (see `SamplePlugin.vcxproj`); `Yaml.h` pulls in `yaml-cpp.lib` itself via `#pragma comment(lib, ...)`.
 
 ### Calling a Plugin from NWScript
 
