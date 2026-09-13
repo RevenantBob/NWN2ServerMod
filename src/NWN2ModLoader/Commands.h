@@ -1,5 +1,9 @@
 #pragma once
 
+/// <summary>
+/// The NWScript virtual machine's command IDs, i.e. the index of each engine function within
+/// <see cref="CNWVirtualMachineCommands::m_pVirtualMachineCommands"/>.
+/// </summary>
 class Commands
 {
 public:

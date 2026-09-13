@@ -12,4 +12,5 @@
     <BuildDependency Project="src/NWN2Shared/NWN2Shared.vcxproj" />
   </Project>
   <Project Path="src/NWN2Shared/NWN2Shared.vcxproj" Id="4e052d6c-3e5c-45c3-9818-6f97d689d234" />
+  <Project Path="src/SamplePlugin/SamplePlugin.vcxproj" Id="4919c872-b3dd-4ed7-8925-4bf58296b2bc" />
 </Solution>

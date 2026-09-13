@@ -13,8 +13,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{bb13c8b7-f3d9-4178-8425-df0bfa8608b5}</ProjectGuid>
-    <RootNamespace>NWN2ModLoader</RootNamespace>
+    <ProjectGuid>{4919c872-b3dd-4ed7-8925-4bf58296b2bc}</ProjectGuid>
+    <RootNamespace>SamplePlugin</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -59,7 +59,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <AdditionalIncludeDirectories>..\NWN2Shared\;..\NWN2Plugin\;..\Detours-4.0.1\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\NWN2Plugin\</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -81,7 +81,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <AdditionalIncludeDirectories>..\NWN2Shared\;..\NWN2Plugin\;..\Detours-4.0.1\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\NWN2Plugin\</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -94,23 +94,14 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="CExoString.h" />
-    <ClInclude Include="Commands.h" />
-    <ClInclude Include="DataBlock.h" />
-    <ClInclude Include="NWN2Mod.h" />
-    <ClInclude Include="PEPattern.h" />
-    <ClInclude Include="..\NWN2Plugin\Plugin.h" />
-    <ClInclude Include="PluginManager.h" />
-    <ClInclude Include="VirtualMachineCommands.h" />
+    <ClCompile Include="SamplePlugin.cpp" />
+    <ClCompile Include="..\NWN2Plugin\Data.cpp" />
+    <ClCompile Include="..\NWN2Plugin\Logger.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="CExoString.cpp" />
-    <ClCompile Include="DataBlock.cpp" />
-    <ClCompile Include="Main.cpp" />
-    <ClCompile Include="NWN2Mod.cpp" />
-    <ClCompile Include="PEPattern.cpp" />
-    <ClCompile Include="PluginManager.cpp" />
-    <ClCompile Include="VirtualMachineCommands.cpp" />
+    <ClInclude Include="..\NWN2Plugin\Plugin.h" />
+    <ClInclude Include="..\NWN2Plugin\Data.h" />
+    <ClInclude Include="..\NWN2Plugin\Logger.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

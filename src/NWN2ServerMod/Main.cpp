@@ -12,6 +12,8 @@
 #include <NWN2Shared.h>
 #include "NWN2Server.h"
 
+/// <summary>Splits the current process's command line into arguments, argv[0] included.</summary>
+/// <returns>The parsed arguments, or an empty vector if the command line couldn't be parsed.</returns>
 std::vector<std::wstring> GetArguments()
 {
     std::vector<std::wstring> argsOut;
@@ -40,6 +42,7 @@ std::vector<std::wstring> GetArguments()
 }
 
 
+/// <summary>Resolves the config path: the first command-line argument if given, otherwise <c>nwn2mod.config</c> next to this executable.</summary>
 std::wstring GetConfigPath()
 {
     std::wstring configPath;
@@ -60,6 +63,8 @@ std::wstring GetConfigPath()
     return configPath;
 }
 
+/// <summary>Application entry point: resolves the config path and runs <see cref="NWN2Server::LoadServer"/>.</summary>
+/// <returns>0 on success; 1 if launching the server failed.</returns>
 int WINAPI wWinMain(
     HINSTANCE hInstance,
     HINSTANCE,

@@ -2,6 +2,8 @@
 #include "PEPattern.h"
 #include <detours.h>
 #include <cstring>
+#include <cstdlib>
+#include <new>
 #include "Commands.h"
 
 std::unique_ptr<NWN2Mod> NWN2Mod::Current;
@@ -9,6 +11,8 @@ std::unique_ptr<NWN2Mod> NWN2Mod::Current;
 InitializeNetLayerFunc NWN2Mod::_InitializeNetLayer;
 InitializeCommandsFunc NWN2Mod::_InitializeCommands;
 SetBinaryDataFunc NWN2Mod::_SetBinaryData;
+GetBinaryDataFunc NWN2Mod::_GetBinaryData;
+RunScriptFunc NWN2Mod::_RunScript;
 
 std::expected<void, uint32_t> NWN2Mod::Initialize()
 {
@@ -26,6 +30,13 @@ std::expected<void, uint32_t> NWN2Mod::Initialize()
 
         return std::unexpected(ERROR_HOOK_NOT_INSTALLED);
     }
+
+    // All hooks are attached at this point, so it's safe for plugins to start receiving calls.
+    _PluginManager.LoadPlugins(this, _Config.plugins.value_or(std::vector<std::string>{}));
+
+    // Every plugin is loaded by this point, so it's safe for OnInitialize to look up any other
+    // plugin regardless of load order.
+    _PluginManager.InitializeAll(this);
 
     Log("Initializing complete.");
 
@@ -72,6 +83,18 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
         return std::unexpected(std::format("Failed to find SetBinaryData: {}", setBinaryData.error()));
     }
 
+    auto getBinaryData = FindGetBinaryData();
+    if (!getBinaryData)
+    {
+        return std::unexpected(std::format("Failed to find GetBinaryData: {}", getBinaryData.error()));
+    }
+
+    auto runScript = FindRunScript();
+    if (!runScript)
+    {
+        return std::unexpected(std::format("Failed to find RunScript: {}", runScript.error()));
+    }
+
     // Sanity check
     uint8_t *pBuffer = (uint8_t *)initNet.value();
     if (pBuffer[0] != 0x48)
@@ -90,6 +113,18 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
     {
         return std::unexpected(std::format("Found invalid address for SetBinaryData: 0x{:016X} Data:0x{:02X}", (uint64_t)pBuffer, *pBuffer));
     }
+
+    pBuffer = (uint8_t*)getBinaryData.value();
+    if (pBuffer[0] != 0x48)
+    {
+        return std::unexpected(std::format("Found invalid address for GetBinaryData: 0x{:016X} Data:0x{:02X}", (uint64_t)pBuffer, *pBuffer));
+    }
+
+    pBuffer = (uint8_t*)runScript.value();
+    if (pBuffer[0] != 0x48)
+    {
+        return std::unexpected(std::format("Found invalid address for RunScript: 0x{:016X} Data:0x{:02X}", (uint64_t)pBuffer, *pBuffer));
+    }
     // Should be initialized to 0x0000000000000000
     if (*((uintptr_t*)virtualMachine.value()) != 0x0000000000000000)
     {
@@ -99,6 +134,8 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
     _InitializeCommands = (InitializeCommandsFunc)initCommands.value();
     _InitializeNetLayer = (InitializeNetLayerFunc)initNet.value();
     _SetBinaryData = (SetBinaryDataFunc)setBinaryData.value();
+    _GetBinaryData = (GetBinaryDataFunc)getBinaryData.value();
+    _RunScript = (RunScriptFunc)runScript.value();
 
     _VirtualMachine = virtualMachine.value(); // This is the address of the global. We'll fix it to the value of the global later. It lasts until server shutdown.
 
@@ -109,6 +146,7 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
     DetourAttach(&(PVOID&)_InitializeNetLayer, &HookInitializeNetLayer);
     DetourAttach(&(PVOID&)_InitializeCommands, &HookInitializeCommands);
     DetourAttach(&(PVOID&)_SetBinaryData, &HookSetBinaryData);
+    DetourAttach(&(PVOID&)_GetBinaryData, &HookGetBinaryData);
 
     LONG error = DetourTransactionCommit();
     if (error != NO_ERROR)
@@ -122,49 +160,128 @@ std::expected<void, std::string> NWN2Mod::DoHooks()
 
 void __cdecl NWN2Mod::NWNXSetString(const char* plugin, const char* function, const char* param1, int param2, const char* value)
 {
-    std::string message = std::format("NNXSetString(\"{}\", \"{}\", \"{}\", {}, \"{}\")", plugin, function, param1, param2, value);
+    IPlugin* target = Current->_PluginManager.FindById(plugin);
+    if (!target)
+    {
+        NWN2Mod::Log("NWNXSetString: no plugin registered for '{}'.", plugin);
+        return;
+    }
 
-    ::MessageBoxA(NULL, message.c_str(), "NWN2Mod", MB_OK);
+    target->OnNWNXSetString(function, param1, param2, value);
 }
 
 void __cdecl NWN2Mod::NWNXSetInt(const char* plugin, const char* function, const char* param1, int param2, int value)
 {
-    std::string message = std::format("NWNXSetInt(\"{}\", \"{}\", \"{}\", {}, {})", plugin, function, param1, param2, value);
+    IPlugin* target = Current->_PluginManager.FindById(plugin);
+    if (!target)
+    {
+        NWN2Mod::Log("NWNXSetInt: no plugin registered for '{}'.", plugin);
+        return;
+    }
 
-    ::MessageBoxA(NULL, message.c_str(), "NWN2Mod", MB_OK);
+    target->OnNWNXSetInt(function, param1, param2, value);
 }
 
 void __cdecl NWN2Mod::NWNXSetFloat(const char* plugin, const char* function, const char* param1, int param2, float value)
 {
-    std::string message = std::format("NWNXSetFloat(\"{}\", \"{}\", \"{}\", {}, {})", plugin, function, param1, param2, value);
+    IPlugin* target = Current->_PluginManager.FindById(plugin);
+    if (!target)
+    {
+        NWN2Mod::Log("NWNXSetFloat: no plugin registered for '{}'.", plugin);
+        return;
+    }
 
-    ::MessageBoxA(NULL, message.c_str(), "NWN2Mod", MB_OK);
+    target->OnNWNXSetFloat(function, param1, param2, value);
+}
+
+namespace
+{
+    /// <summary>
+    /// Host-side implementation of <see cref="IStringResult"/>, passed to a plugin's
+    /// <c>OnNWNXGetString</c> by reference.
+    /// </summary>
+    /// <remarks>
+    /// Backed by a <c>std::string</c> that lives entirely in this DLL - the plugin never sees or
+    /// touches it directly, only the pure interface, so this doesn't reintroduce STL-across-ABI
+    /// concerns.
+    /// </remarks>
+    class StringResult : public IStringResult
+    {
+    public:
+        char* Allocate(size_t length) override
+        {
+            _value.assign(length, '\0');
+            _handled = true;
+
+            return _value.data();
+        }
+
+        void Set(const char* value) override
+        {
+            _value = value;
+            _handled = true;
+        }
+
+        void Clear() override
+        {
+            _value.clear();
+            _handled = false;
+        }
+
+        bool Handled() const { return _handled; }
+        const char* CStr() const { return _value.c_str(); }
+
+    private:
+        std::string _value;
+        bool _handled = false;
+    };
 }
 
 const char *__cdecl NWN2Mod::NWNXGetString(const char* plugin, const char* function, const char* param1, int param2)
 {
-    std::string message = std::format("NWNXGetString(\"{}\", \"{}\", \"{}\", {})", plugin, function, param1, param2);
+    // Note: The returned string is NOT manipulated in any way from NWN2Server64. Therefore we can reuse a single
+    // static result across calls; its backing buffer just needs to outlive this function, not this specific call.
+    static StringResult result;
+    result.Clear();
 
-    ::MessageBoxA(NULL, message.c_str(), "NWN2Mod", MB_OK);
+    IPlugin* target = Current->_PluginManager.FindById(plugin);
+    if (target)
+    {
+        target->OnNWNXGetString(function, param1, param2, result);
+    }
 
+    if (result.Handled())
+    {
+        return result.CStr();
+    }
+
+    NWN2Mod::Log("NWNXGetString: no plugin registered for '{}', or it had no value.", plugin);
     return "";
 }
 
 int __cdecl NWN2Mod::NWNXGetInt(const char* plugin, const char* function, const char* param1, int param2)
 {
-    std::string message = std::format("NWNXGetInt(\"{}\", \"{}\", \"{}\", {})", plugin, function, param1, param2);
+    int value = 0;
+    IPlugin* target = Current->_PluginManager.FindById(plugin);
+    if (target && target->OnNWNXGetInt(function, param1, param2, value))
+    {
+        return value;
+    }
 
-    ::MessageBoxA(NULL, message.c_str(), "NWN2Mod", MB_OK);
-
+    NWN2Mod::Log("NWNXGetInt: no plugin registered for '{}'.", plugin);
     return 0;
 }
 
 float __cdecl NWN2Mod::NWNXGetFloat(const char* plugin, const char* function, const char* param1, int param2)
 {
-    std::string message = std::format("NWNXGetFloat(\"{}\", \"{}\", \"{}\", {})", plugin, function, param1, param2);
+    float value = 0.0f;
+    IPlugin* target = Current->_PluginManager.FindById(plugin);
+    if (target && target->OnNWNXGetFloat(function, param1, param2, value))
+    {
+        return value;
+    }
 
-    ::MessageBoxA(NULL, message.c_str(), "NWN2Mod", MB_OK);
-
+    NWN2Mod::Log("NWNXGetFloat: no plugin registered for '{}'.", plugin);
     return 0.0f;
 }
 
@@ -198,7 +315,106 @@ bool __fastcall NWN2Mod::HookSetBinaryData(
 {
     NWN2Mod::Log("SetBinaryData called.");
 
-    return true;
+    // The campaign name is the plugin selector: StoreCampaignObject("MyPlugin", varName, obj,
+    // player) routes straight to the plugin whose GetPluginId() is "MyPlugin". CExoString's
+    // buffer is null-terminated, so it can be handed to the plugin as-is.
+    //
+    // Never call through to the real SetBinaryData: that would write into NWN2Server's own
+    // campaign DB cache (and eventually its SQLite file), which we don't want under any
+    // circumstances. The plugin's own return value becomes StoreCampaignObject's result to the
+    // calling script, so it's fully in charge of that; an unclaimed campaign name reports false,
+    // since nothing stored anything.
+    //
+    // varType is part of the real SetBinaryData's signature (kept here so this hook's own ABI
+    // matches what the engine calls), but it's dead at every known call site, so it's not
+    // forwarded to the plugin to avoid representing it as meaningful data.
+    IPlugin* plugin = Current->_PluginManager.FindById(pCampNameExoStr->m_sString);
+    if (!plugin)
+    {
+        return false;
+    }
+
+    return plugin->OnSetBinaryData(pVarNameExoStr->m_sString, pPlayerExoStr->m_sString,
+        pDataBlock->m_data, (size_t)pDataBlock->m_used);
+}
+
+namespace
+{
+    /// <summary>
+    /// Host-side implementation of <see cref="IBinaryDataResult"/>, passed to a plugin's
+    /// <c>OnGetBinaryData</c> by reference. Owns the <see cref="DataBlock"/> the plugin allocates
+    /// into, if it does.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Allocate"/> fabricates a <c>std::shared_ptr&lt;DataBlock&gt;</c> control block
+    /// via <c>std::make_shared</c>, compiled entirely in this DLL, and hands it to the engine
+    /// through <c>pRetVal</c> (see <see cref="NWN2Mod::HookGetBinaryData"/>). This matches the
+    /// real engine's own <c>CCampaignDB::GetBinaryData</c>, which builds its return value the same
+    /// way; see <see cref="DataBlock"/> for how its allocation matches the real one too.
+    /// </remarks>
+    class BinaryDataResult : public IBinaryDataResult
+    {
+    public:
+        uint8_t* Allocate(size_t size) override
+        {
+            _block = std::make_shared<DataBlock>();
+            _block->m_used = size;
+            _block->m_allocated = size;
+            _block->m_owning = true;
+            _block->m_data = size ? static_cast<uint8_t*>(std::malloc(size)) : nullptr;
+
+            return _block->m_data;
+        }
+
+        void Clear() override
+        {
+            _block.reset();
+        }
+
+        bool Handled() const { return (bool)_block; }
+        std::shared_ptr<DataBlock> Take() { return std::move(_block); }
+
+    private:
+        std::shared_ptr<DataBlock> _block;
+    };
+}
+
+DataBlockPtr* __fastcall NWN2Mod::HookGetBinaryData(
+    void* pThisCampaignDB,
+    DataBlockPtr* pRetVal,
+    CExoString* pCampNameExoStr,
+    CExoString* pVarNameExoStr,
+    CExoString* pPlayerExoStr)
+{
+    NWN2Mod::Log("GetBinaryData called.");
+
+    // The campaign name is the plugin selector, same as HookSetBinaryData.
+    IPlugin* plugin = Current->_PluginManager.FindById(pCampNameExoStr->m_sString);
+    if (plugin)
+    {
+        BinaryDataResult result;
+        plugin->OnGetBinaryData(pVarNameExoStr->m_sString, pPlayerExoStr->m_sString, result);
+
+        if (result.Handled())
+        {
+            // DataBlockPtr mirrors std::shared_ptr<DataBlock>'s layout exactly, so constructing
+            // the real shared_ptr directly into the caller-supplied storage at pRetVal is exactly
+            // what the compiler-generated hidden-return-value thunk would do for a genuine
+            // std::shared_ptr<DataBlock> return value.
+            new (pRetVal) std::shared_ptr<DataBlock>(result.Take());
+
+            return pRetVal;
+        }
+    }
+
+    // Never call through to the real GetBinaryData: on a cache miss it would load from
+    // NWN2Server's own SQLite-backed campaign DB, which we don't want under any circumstances -
+    // claimed by a plugin or not. Hand back an empty (null) shared_ptr instead; this is always
+    // safe regardless of shared_ptr ABI, since a null shared_ptr never touches its control block.
+    pRetVal->m_pDataBlock = nullptr;
+    pRetVal->m_pRefCount = nullptr;
+
+    return pRetVal;
 }
 
 std::expected<void*, std::string> NWN2Mod::FindInitializeCommands()
@@ -249,6 +465,39 @@ std::expected<void*, std::string> NWN2Mod::FindSetBinaryData()
     return PEPattern::FindPattern(L"NWN2Server64.exe", pattern);
 }
 
+std::expected<void*, std::string> NWN2Mod::FindGetBinaryData()
+{
+    // This is the byte pattern for the beginning of CCampaignDB::GetBinaryData. This is hooked so we can
+    // observe (and eventually intercept) binary campaign object retrieval, the counterpart to SetBinaryData.
+    //
+    // This is the function's prologue (identical, aside from the wildcarded bytes noted below,
+    // between the reference build and the current build):
+    // 48 89 5C 24 10        MOV    [RSP+0x10], RBX
+    // 4C 89 4C 24 20        MOV    [RSP+0x20], R9
+    // 55                    PUSH   RBP
+    // 56                    PUSH   RSI
+    // 57                    PUSH   RDI
+    // 41 54                 PUSH   R12
+    // 41 55                 PUSH   R13
+    // 41 56                 PUSH   R14
+    // 41 57                 PUSH   R15
+    // 48 8D 6C 24 90        LEA    RBP, [RSP-0x70]      (offset wildcarded)
+    // 48 81 EC 70 01 00 00  SUB    RSP, 0x170            (immediate wildcarded)
+    // 0F 29 B4 24 60 01 00 00  MOVAPS [RSP+0x160], XMM6  (offset wildcarded)
+    // 4D 8B F9              MOV    R15, R9
+    // 4D 8B E0              MOV    R12, R8
+    // 4C 8B F2              MOV    R14, RDX
+    // 48 8B F9              MOV    RDI, RCX
+    // 49 8B D0              MOV    RDX, R8
+    // 48 8D 4D A8           LEA    RCX, [RBP-0x58]       (offset wildcarded)
+    // E8 ?? ?? ?? ??        CALL   CExoString copy ctor  (displacement wildcarded, target differs per build)
+    //
+    // The register shuffle (R15/R12/R14/RDI/RDX) is the parameter marshalling for the
+    // (this, retval-shared_ptr, CExoString*, CExoString*, CExoString*) signature and is kept fixed since
+    // it reflects the calling convention, not compiler-specific frame layout.
+    std::string pattern = "48 89 5C 24 10 4C 89 4C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 ?? 48 81 EC ?? ?? ?? ?? 0F 29 B4 24 ?? ?? ?? ?? 4D 8B F9 4D 8B E0 4C 8B F2 48 8B F9 49 8B D0 48 8D 4D ?? E8 ?? ?? ?? ??";
+    return PEPattern::FindPattern(L"NWN2Server64.exe", pattern);
+}
 
 
 std::expected<void*, std::string> NWN2Mod::FindVirtualMachineWrite()
@@ -291,6 +540,31 @@ std::expected<void*, std::string> NWN2Mod::FindVirtualMachineWrite()
     auto absoluteAddress = ExtractRipRelativeAddress((uintptr_t)(anchor + storeOffset), 0, 3, STORE_LENGTH);
 
     return (void *)absoluteAddress;
+}
+
+std::expected<void*, std::string> NWN2Mod::FindRunScript()
+{
+    // This is the byte pattern for CVirtualMachine::RunScript(CExoString*, unsigned long, int,
+    // PARAMTER_VALIDATION) - the 4-argument convenience overload that always runs against the
+    // global g_pVirtualMachine (rather than a caller-supplied CVirtualMachine*, and with no extra
+    // script parameters). It is a thin wrapper that just forwards to the real worker function:
+    //
+    // 48 83 EC 48              SUB    RSP,0x48
+    // 33 C0                    XOR    EAX,EAX
+    // 48 89 44 24 38           MOV    [RSP+0x38],RAX      ; zero the temp (empty) parameter array
+    // 48 89 44 24 30           MOV    [RSP+0x30],RAX
+    // 8B 44 24 70              MOV    EAX,[RSP+0x70]      ; reload this function's own 5th (stack) arg
+    // 89 44 24 28              MOV    [RSP+0x28],EAX      ; ...onto the worker's 5th arg slot
+    // 44 89 4C 24 20           MOV    [RSP+0x20],R9D      ; this function's own 4th arg (register)...
+    // 4C 8D 4C 24 30           LEA    R9,[RSP+0x30]       ; ...goes to the worker's 4th arg slot, so R9 is now free to hold &tempArray
+    // 48 8B 0D ?? ?? ?? ??     MOV    RCX,[g_pVirtualMachine]  (RIP-relative; displacement wildcarded, shifts between builds)
+    // E8 ?? ?? ?? ??           CALL   RunScript worker         (displacement wildcarded, target differs per build)
+    //
+    // The function's first parameter is a dead "this" slot: it's clobbered by the MOV RCX,
+    // [g_pVirtualMachine] above before ever being read, which is how a plain, non-member call
+    // into it is possible at all.
+    std::string pattern = "48 83 EC 48 33 C0 48 89 44 24 38 48 89 44 24 30 8B 44 24 70 89 44 24 28 44 89 4C 24 20 4C 8D 4C 24 30 48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 90 48 83 C4 48 C3";
+    return PEPattern::FindPattern(L"NWN2Server64.exe", pattern);
 }
 
 uintptr_t  NWN2Mod::ExtractRipRelativeAddress(uintptr_t functionAddress,
@@ -360,4 +634,18 @@ void NWN2Mod::FinishInitialization()
 
     // Fixup Virtual Machine
     _VirtualMachine = *((void **)_VirtualMachine);
+}
+
+bool NWN2Mod::RunScript(const char* script, uint32_t objectId) const
+{
+    if (!script || !*script || !_VirtualMachine)
+    {
+        return false;
+    }
+
+    // CVirtualMachine::RunScript's operator= call only ever reads m_sString (to strlen() and copy
+    // it) - it never reads or writes m_nBufferLength, so leaving it at 0 here is safe.
+    CExoString scriptName{ const_cast<char*>(script), 0 };
+
+    return _RunScript(nullptr, &scriptName, objectId, 0, 0) != 0;
 }

@@ -7,7 +7,6 @@
 #include "PEPattern.h"
 #include <format>
 
-// Helper to convert IDA-style hex string to byte/mask vectors
 std::expected<std::vector<int>, std::string> PEPattern::ParseSignature(std::string_view signature)
 {
     char first = 0;
@@ -59,7 +58,6 @@ std::expected<std::vector<int>, std::string> PEPattern::ParseSignature(std::stri
     return bytes;
 }
 
-// The core pattern scanner
 std::expected<void*, std::string> PEPattern::FindPattern(std::wstring_view moduleName, std::string_view pattern)
 {
     HMODULE hModule = GetModuleHandleW(std::wstring(moduleName).c_str());
@@ -181,7 +179,6 @@ std::expected<void*, std::string> PEPattern::FindPatternRange(std::wstring_view 
     return std::unexpected("signature not found");
 }
 
-// Usage Example inside your DLL initialization thread:
 std::expected<void *, std::string> PEPattern::ExtractCommandTableOffset(std::wstring_view module, std::string_view pattern)
 {
     auto findResult = FindPattern(module, pattern);
